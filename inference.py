@@ -21,9 +21,9 @@ if __name__ == '__main__':
     
     ##### Load model #####  
     print('========= model loading... =========')
+    device = torch.device('cuda')
     # segmentation
     if seg_model == 'pidnet':
-        device = torch.device('cuda')
         seg_model = get_pred_model(name='pidnet-s', num_classes=2)
         seg_model = load_pretrained(seg_model, pidnet_pretrained)
         seg_model.eval()
@@ -34,7 +34,6 @@ if __name__ == '__main__':
     
     # object detection
     if obj_model == 'yolov5':
-        device = torch.device('cuda')
         obj_model = DetectMultiBackend(weights=yolov5_pretrained, device=device, data=data_yaml)
         obj_model.eval()
         stride, names, pt = obj_model.stride, obj_model.names, obj_model.pt
@@ -43,38 +42,39 @@ if __name__ == '__main__':
         pass
     print('========= all models loading complete =========\n')
 
-
     ##### prepare input data #####
+    print('========= prepare data =========')
     # Load input data as an object
     imgsz = check_img_size(size, s=32)
-    dataset = LoadImages('input/images/rail', img_size=imgsz, stride=stride, auto=pt)   
-    # increment output dir
-    save_dir = os.path.join(sv_path, 'exp')
-    save_dir = increment_path(save_dir, exist_ok=False)  
-    os.mkdir(save_dir)
-    
+    dataset = LoadImages(input_data, img_size=imgsz, stride=stride, auto=pt)
+    vid_path, vid_writer = [None] * bs, [None] * bs
+    if sv_result:
+        # increment output dir
+        save_dir = os.path.join(sv_path, 'exp')
+        save_dir = increment_path(save_dir, exist_ok=False)
+        os.mkdir(save_dir)
+
     ##### Inference ######
     print('========= start inference =========')
     with torch.no_grad():
-        for path, im, im0s, vid_cap, s in dataset:   
-            
+        for path, im, im0s, vid_cap, s in dataset:
             #### Pre-process input data ####
             # load image
-            rail_mask = np.zeros(size).astype(np.uint8)    # canvas             
+            rail_mask = np.zeros(size).astype(np.uint8)    # canvas
             # transform
             im = torch.from_numpy(im).to(device)
             im = im.half() if obj_model.fp16 else im.float()  # uint8 to fp16/32
             im /= 255  # 0 - 255 to 0.0 - 1.0
             if len(im.shape) == 3:
                 im = im[None]
-                
+
             #### Railway Predict ####
             rail_pred = seg_model(im)
             rail_pred = F.interpolate(rail_pred, size=size, mode='bilinear', align_corners=True)
             rail_pred = torch.argmax(rail_pred, dim=1).squeeze(0).cpu().numpy()
             # generate binary image
             for i, color in enumerate(color_map):
-                rail_mask[:,:][rail_pred==i] = color_map[i] # binary image of rail
+                rail_mask[:, :][rail_pred == i] = color_map[i]  # binary image of rail
     
             #### Object Predict ####
             obj_pred = obj_model(im)      
@@ -94,12 +94,12 @@ if __name__ == '__main__':
                     for c in det[:, -1].unique():
                         n = (det[:, -1] == c).sum()  # detections per class
                         s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
-                    # Write reults                
+                    # Write results
                     for *xyxy, conf, cls in reversed(det):
                         p1, p2 = (int(xyxy[0]), int(xyxy[1])), (int(xyxy[2]), int(xyxy[3]))
                         bxl.append([p1, p2, int(cls), round(float(conf)*100)/100])
                         w, h = (p2[1] - p1[1]), (p2[0] - p1[0])
-                        obj_mask[max(0, int(p1[1]-0.25*w)) : min(size[0], int(p2[1]+0.25*w)), max(0, int(p1[0]-0.25*h)) : min(size[1], int(p2[0]+0.25*h))] = 1
+                        obj_mask[max(0, int(p1[1]-0.25*w)): min(size[0], int(p2[1]+0.25*w)), max(0, int(p1[0]-0.25*h)): min(size[1], int(p2[0]+0.25*h))] = 1
             
             # object results
             print(s)
@@ -111,13 +111,13 @@ if __name__ == '__main__':
             # BGR using cv2
             alerm_mask = np.ones(sizec, np.uint8)*255
             if intersection.any() == 1:
-                alerm_mask[:,:,0] = 0
-                alerm_mask[:,:,1] = 0
+                alerm_mask[:, :, 0] = 0
+                alerm_mask[:, :, 1] = 0
             else:
-                alerm_mask[:,:,0] = 0 
-                alerm_mask[:,:,2] = 0   
+                alerm_mask[:, :, 0] = 0
+                alerm_mask[:, :, 2] = 0
             # rail color
-            rail_col = np.array([rail_mask, rail_mask, rail_mask],dtype='uint8').transpose((1, 2, 0))
+            rail_col = np.array([rail_mask, rail_mask, rail_mask], dtype='uint8').transpose((1, 2, 0))
             rail_col[:, :, 0] = rail_col[:, :, 0]/255 * 255
             rail_col[:, :, 1] = rail_col[:, :, 1]/255 * 0
             rail_col[:, :, 2] = rail_col[:, :, 2]/255 * 0
@@ -126,7 +126,7 @@ if __name__ == '__main__':
             output = cv2.addWeighted(im0s, 1, rail_col, 0.5, 0)
             output = cv2.addWeighted(output, 1, alerm_mask, 0.2, 0)
             for ob in bxl:
-                # bouond-box 
+                # bound-box
                 label = obj_model.names[ob[2]]
                 text = f'{label}:{ob[3]}'
                 color = COLORS[ob[2]]
@@ -134,33 +134,47 @@ if __name__ == '__main__':
                 labelSize = cv2.getTextSize(text, fontFace, fontScale, thickness)
                 x2 = ob[0][0] + labelSize[0][0]
                 y2 = ob[0][1] - labelSize[0][1]
-                # plot             
+                # plot
                 output = cv2.rectangle(output, ob[0], ob[1], color, box_thick)              # box
-                cv2.rectangle(output, ob[0], (x2, y2), color, cv2.FILLED)           # text background
-                cv2.putText(output, text, ob[0], fontFace, fontScale, (0,0,0), thickness)  # label
+                cv2.rectangle(output, ob[0], (x2, y2), color, cv2.FILLED)                   # text background
+                cv2.putText(output, text, ob[0], fontFace, fontScale, (0,0,0), thickness)   # label
             
             #### Outputs ####
-            # save mask
-            if sv_mask:
-                # save railway mask
-                rail_path = save_dir / 'rail_mask'
-                sv_img = Image.fromarray(rail_mask)
-                if not os.path.exists(rail_path):
-                    os.mkdir(rail_path)
-                sv_img.save(rail_path / path.split("\\")[-1])
-            
-                # save object mask
-                obj_path = save_dir / 'obj_mask'
-                sv_img = Image.fromarray(obj_mask*255)
-                if not os.path.exists(obj_path):
-                    os.mkdir(obj_path)
-                sv_img.save(obj_path / path.split("\\")[-1])
             # show results
             if sv_show:
                 cv2.imshow('a', output)
                 cv2.waitKey(100)
                 cv2.destroyAllWindows()
+
             # save results
             if sv_result:
-                cv2.imwrite(save_dir.__str__()+'\\'+f'{p.name}', output)
+                if dataset.mode == 'image':
+                    cv2.imwrite(save_dir.__str__()+'\\'+f'{p.name}', output)
+                    # save mask
+                    if sv_mask:
+                        # save railway mask
+                        rail_path = save_dir / 'rail_mask'
+                        sv_img = Image.fromarray(rail_mask)
+                        if not os.path.exists(rail_path):
+                            os.mkdir(rail_path)
+                        sv_img.save(rail_path / path.split("\\")[-1])
+                        # save object mask
+                        obj_path = save_dir / 'obj_mask'
+                        sv_img = Image.fromarray(obj_mask*255)
+                        if not os.path.exists(obj_path):
+                            os.mkdir(obj_path)
+                        sv_img.save(obj_path / path.split("\\")[-1])
+                elif dataset.mode =='video':
+                    save_path = str(save_dir / p.name)
+                    if vid_path[i] != save_path:  # new video
+                        vid_path[i] = save_path
+                        if isinstance(vid_writer[i], cv2.VideoWriter):
+                            vid_writer[i].release()  # release previous video writer
+                        fps = vid_cap.get(cv2.CAP_PROP_FPS)
+                        w = int(vid_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                        h = int(vid_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                        save_path = str(Path(save_path).with_suffix('.mp4'))  # force *.mp4 suffix on results videos
+                        vid_writer[i] = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
+                    vid_writer[i].write(output)
+
     print('========= finish inference =========')

@@ -1,5 +1,7 @@
 # our project ignore
 dataset/
+input/
+temp/
 output/
 
 # Created by .ignore support plugin (hsz.mobi)

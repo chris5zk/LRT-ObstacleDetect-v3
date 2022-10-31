@@ -6,11 +6,13 @@ Created on Fri Oct 21 02:51:34 2022
 """
 
 ### images data
-size = [1080, 1920]     # input size
+bs = 1                  # batch size
+size = [540, 960]     # input size
 sv_path = './output'    # output dir
 sv_mask = True          # save mask or not
 sv_result = True        # save result or not
 sv_show = False         # show results
+input_data = './input'  # path of input data
 COLORS = ((244,  67,  54),
           (233,  30,  99),
           (156,  39, 176),
